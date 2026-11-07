@@ -146,6 +146,28 @@ class PromptTests(unittest.TestCase):
                        str(root/'run/stage_2.pt'), '--splits', 'ood_test']):
                 train_iil.evaluation_main()
 
+            import train_head_only
+            with patch('sys.argv', ['train_head_only.py', '--source',
+                       str(root/'run/stage_0.pt'), '--output-dir', str(root/'head')]):
+                train_head_only.main()
+            source = torch.load(root/'run/stage_0.pt', weights_only=False)
+            baseline = torch.load(root/'head/stage_2.pt', weights_only=False)
+            self.assertFalse(baseline['prompted'])
+            self.assertFalse(any(k.startswith('prompt_pool.') for k in baseline['main']))
+            for k, v in baseline['main'].items():
+                if not k.startswith('predictor.'):
+                    self.assertTrue(torch.equal(v, source['main'][k]), k)
+            self.assertTrue(any(not torch.equal(v, source['main'][k])
+                                for k, v in baseline['main'].items()
+                                if k.startswith('predictor.')))
+            with patch('sys.argv', ['train_head_only.py', '--resume',
+                                    str(root/'head/stage_1.pt')]):
+                train_head_only.main()
+            head_resumed = torch.load(root/'head/stage_2.pt', weights_only=False)
+            for k, v in baseline['main'].items():
+                self.assertTrue(torch.equal(v, head_resumed['main'][k]), k)
+            self.assertEqual(baseline['history'], head_resumed['history'])
+
 
 if __name__ == '__main__':
     unittest.main()
