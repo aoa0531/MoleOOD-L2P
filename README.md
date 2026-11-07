@@ -53,7 +53,7 @@
 
 同一分子的所有原子共享所选 Prompt，不同分子可以选择不同 Prompt。
 
-本实现借鉴 L2P 的检索机制，但使用加法式图 Prompt，不直接复现原版 Transformer 中的 Prompt token 拼接。
+本实现借鉴 L2P 的检索机制，但使用加法式图 Prompt，不直接复现原版 Transformer 中的 Prompt token 拼接（如果像原版那样拼接，需要在GNN前面加一个映射头，转变维度）。
 
 ### Prompt 池
 
