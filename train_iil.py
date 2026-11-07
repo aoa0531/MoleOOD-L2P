@@ -41,9 +41,13 @@ def loader(cfg, split, indices=None, shuffle=False):
 
 
 def build_model(cfg, prompted=False):
-    return Framework(cfg['emb_dim'], cfg['emb_dim'], 2, cfg['dropout'],
-                     prompt_pool_size=cfg['pool_size'] if prompted else None,
+    shared = prompted and cfg.get('baseline') == 'shared_prompt'
+    model = Framework(cfg['emb_dim'], cfg['emb_dim'], 2, cfg['dropout'],
+                     prompt_pool_size=cfg['pool_size'] if prompted and not shared else None,
                      prompt_init_scale=cfg['prompt_init_scale'])
+    if shared:
+        model.enable_shared_prompt(cfg['prompt_init_scale'])
+    return model
 
 
 @torch.no_grad()

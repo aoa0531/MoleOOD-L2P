@@ -3,7 +3,7 @@ import math
 from torch_geometric.nn import global_mean_pool
 from .utils import pyg_batch_from_subgraphs, get_subgraph_batch_index
 from .mygin import MyGIN
-from .prompt_pool import PromptPool
+from .prompt_pool import PromptPool, SharedPrompt
 # 【关键】从现在开始，所有 GNN Backbone (比如 GIN) 都必须是 PyG 的版本
 # 这是一个示例的 PyG GIN 实现
 from torch_geometric.nn import GIN, MLP
@@ -85,6 +85,12 @@ class Framework(torch.nn.Module):
         # The historical attention module is not used by this implementation.
         self.aggr.requires_grad_(False)
 
+    def enable_shared_prompt(self, init_scale=0.02):
+        if self.prompt_pool is not None:
+            raise RuntimeError('Prompt module already exists')
+        self.prompt_pool = SharedPrompt(self.base_dim, init_scale).to(next(self.parameters()).device)
+        self.freeze_encoders()
+
     def train(self, mode=True):
         super().train(mode)
         if self.encoders_frozen:
@@ -111,6 +117,9 @@ class Framework(torch.nn.Module):
         if self.prompt_pool is None:
             main_feat = self.base_model(*args)
             key_loss = main_feat.new_zeros(())
+        elif isinstance(self.prompt_pool, SharedPrompt):
+            selected, indices, key_loss = self.prompt_pool.for_batch(data.num_graphs)
+            main_feat = self.base_model(*args, graph_prompt=selected)
         else:
             with torch.no_grad():
                 query = self.base_model(*args)

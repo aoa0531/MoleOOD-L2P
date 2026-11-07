@@ -101,6 +101,20 @@ class PromptTests(unittest.TestCase):
         restored.load_state_dict(model.state_dict())
         torch.testing.assert_close(model(batch()), restored(batch()))
 
+    def test_shared_prompt_has_no_keys_or_query_pass(self):
+        model = Framework(8, 8, 2, dropout=0.)
+        model.enable_shared_prompt()
+        model.train()
+        self.assertFalse(hasattr(model.prompt_pool, 'keys'))
+        with patch.object(model.base_model, 'forward', wraps=model.base_model.forward) as forward:
+            result = model(batch(), return_aux=True)
+            self.assertEqual(forward.call_count, 1)
+        self.assertEqual(result['key_loss'].item(), 0.)
+        self.assertEqual(result['prompt_indices'].tolist(), [0, 0])
+        result['logits'].square().sum().backward()
+        self.assertGreater(model.prompt_pool.prompts.grad.abs().sum().item(), 0.)
+        self.assertTrue(all(p.grad is None for p in model.base_model.parameters()))
+
     def test_split_repeatability_and_duplicates(self):
         rows = [{'smiles': f'molecule-{i}', 'cls_label': i % 2} for i in range(60)]
         rows.append(rows[0].copy())
@@ -167,6 +181,30 @@ class PromptTests(unittest.TestCase):
             for k, v in baseline['main'].items():
                 self.assertTrue(torch.equal(v, head_resumed['main'][k]), k)
             self.assertEqual(baseline['history'], head_resumed['history'])
+
+            with patch('sys.argv', ['train_shared_prompt.py', '--source',
+                       str(root/'run/stage_0.pt'), '--output-dir', str(root/'shared')]):
+                train_head_only.main(baseline='shared_prompt')
+            shared = torch.load(root/'shared/stage_2.pt', weights_only=False)
+            shared0 = torch.load(root/'shared/stage_0.pt', weights_only=False)
+            self.assertTrue(torch.equal(shared0['main']['prompt_pool.prompts'],
+                                        source['main']['prompt_pool.prompts'][:1]))
+            self.assertFalse(any(k.startswith('prompt_pool.keys') for k in shared['main']))
+            self.assertFalse(torch.equal(shared0['main']['prompt_pool.prompts'],
+                                         shared['main']['prompt_pool.prompts']))
+            for k, v in shared['main'].items():
+                if not k.startswith(('predictor.', 'prompt_pool.')):
+                    self.assertTrue(torch.equal(v, source['main'][k]), k)
+            with patch('sys.argv', ['train_shared_prompt.py', '--resume',
+                                    str(root/'shared/stage_1.pt')]):
+                train_head_only.main(baseline='shared_prompt')
+            shared_resumed = torch.load(root/'shared/stage_2.pt', weights_only=False)
+            for k, v in shared['main'].items():
+                self.assertTrue(torch.equal(v, shared_resumed['main'][k]), k)
+            self.assertEqual(shared['history'], shared_resumed['history'])
+            with patch('sys.argv', ['evaluate.py', '--iil-checkpoint',
+                       str(root/'shared/stage_2.pt'), '--splits', 'ood_test']):
+                train_iil.evaluation_main()
 
 
 if __name__ == '__main__':

@@ -4,6 +4,18 @@ from torch import nn
 from torch.nn import functional as F
 
 
+class SharedPrompt(nn.Module):
+    """One length-one prompt shared by every molecule; no keys or retrieval."""
+    def __init__(self, dim, init_scale=0.02):
+        super().__init__()
+        self.prompts = nn.Parameter(torch.empty(1, dim))
+        nn.init.uniform_(self.prompts, -init_scale, init_scale)
+
+    def for_batch(self, batch_size):
+        indices = torch.zeros(batch_size, dtype=torch.long, device=self.prompts.device)
+        return self.prompts.expand(batch_size, -1), indices, self.prompts.new_zeros(())
+
+
 class PromptPool(nn.Module):
     def __init__(self, pool_size, dim, init_scale=0.02):
         super().__init__()

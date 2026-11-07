@@ -19,18 +19,29 @@ def restore_rng(checkpoint):
         torch.cuda.set_rng_state_all([s.cpu() for s in checkpoint['cuda_rng']])
 
 
-def head_model(checkpoint, cfg, device):
+def head_model(checkpoint, cfg, device, baseline='head_only', resume=False):
+    if baseline == 'shared_prompt' and resume:
+        model = build_model(cfg, prompted=True).to(device)
+        model.load_state_dict(checkpoint['main'], strict=True)
+        return model
     model = build_model(cfg, prompted=False).to(device)
     # Source stage_0 contains unused random prompts; retain exactly its backbone/head.
     state = {k: v for k, v in checkpoint['main'].items()
              if not k.startswith('prompt_pool.')}
     model.load_state_dict(state, strict=True)
     model.freeze_encoders()
+    if baseline == 'shared_prompt':
+        model.enable_shared_prompt(cfg['prompt_init_scale'])
+        # Fixed, predeclared choice, never selected by validation/test performance.
+        with torch.no_grad():
+            model.prompt_pool.prompts.copy_(checkpoint['main']['prompt_pool.prompts'][:1])
     return model
 
 
-def main():
-    parser = argparse.ArgumentParser(__doc__)
+def main(baseline='head_only'):
+    if baseline not in ('head_only', 'shared_prompt'):
+        raise ValueError('Unknown baseline')
+    parser = argparse.ArgumentParser(f'Frozen-encoder IIL baseline: {baseline}')
     source = parser.add_mutually_exclusive_group(required=True)
     source.add_argument('--source', help='Prompt experiment stage_0.pt (before D1)')
     source.add_argument('--resume', help='Completed head-only stage checkpoint')
@@ -43,16 +54,21 @@ def main():
     manifest = checkpoint['manifest']
     validate_split(manifest, resolve(cfg['data_path']))
     if args.source:
-        if checkpoint['stage'] != 0 or not checkpoint['prompted']:
+        if (checkpoint['stage'] != 0 or not checkpoint['prompted']
+                or checkpoint['config'].get('baseline') is not None):
             raise ValueError('Use the original prompt experiment stage_0.pt, not a later stage')
         if not args.output_dir:
             parser.error('--output-dir is required with --source')
         cfg['output_dir'] = args.output_dir
-        cfg['baseline'] = 'head_only'
+        cfg['baseline'] = baseline
+        if baseline == 'shared_prompt':
+            cfg['pool_size'] = 1
+            cfg['key_loss_weight'] = 0.0
+            cfg['shared_prompt_init_index'] = 0
         history = []
     else:
-        if cfg.get('baseline') != 'head_only' or checkpoint['prompted']:
-            raise ValueError('Resume requires a head-only checkpoint')
+        if cfg.get('baseline') != baseline or checkpoint['prompted'] != (baseline == 'shared_prompt'):
+            raise ValueError(f'Resume requires a {baseline} checkpoint')
         if args.output_dir and resolve(args.output_dir) != resolve(cfg['output_dir']):
             raise ValueError('Resume output directory must remain unchanged')
         history = checkpoint['history']
@@ -61,8 +77,11 @@ def main():
         raise FileExistsError('Choose a new output directory; original results are never overwritten')
     output_dir.mkdir(parents=True, exist_ok=True)
     device = torch.device(cfg['device'])
-    model = head_model(checkpoint, cfg, device)
-    optimizer = torch.optim.Adam(model.predictor.parameters(), lr=cfg['head_lr'], weight_decay=0)
+    model = head_model(checkpoint, cfg, device, baseline, resume=bool(args.resume))
+    groups = [{'params': model.predictor.parameters(), 'lr': cfg['head_lr']}]
+    if baseline == 'shared_prompt':
+        groups.append({'params': model.prompt_pool.parameters(), 'lr': cfg['prompt_lr']})
+    optimizer = torch.optim.Adam(groups, weight_decay=0)
     weights = checkpoint['class_weights']
     if weights is not None:
         weights = weights.to(device)
@@ -73,7 +92,7 @@ def main():
     else:
         metrics = {name: evaluate_loader(model, batches, device)
                    for name, batches in evaluations.items()}
-        history.append({'stage': 0, 'mode': 'head_only', 'metrics': metrics})
+        history.append({'stage': 0, 'mode': baseline, 'metrics': metrics})
         # Evaluation/model construction consumes RNG. Restore the original D1 start
         # AFTER both so shuffled batches and predictor dropout align with that run.
         restore_rng(checkpoint)
@@ -92,10 +111,10 @@ def main():
                 optimizer.step()
                 total += loss.item() * len(data.y)
                 seen += len(data.y)
-            print(f'Head-only D{stage} epoch {epoch+1}: cls_loss={total/seen:.6f}', flush=True)
+            print(f'{baseline} D{stage} epoch {epoch+1}: cls_loss={total/seen:.6f}', flush=True)
         metrics = {name: evaluate_loader(model, batches, device)
                    for name, batches in evaluations.items()}
-        history.append({'stage': stage, 'mode': 'head_only', 'metrics': metrics})
+        history.append({'stage': stage, 'mode': baseline, 'metrics': metrics})
         save_checkpoint(output_dir/f'stage_{stage}.pt', model, optimizer,
                         cfg, manifest, stage, weights, history)
         (output_dir/'metrics.json').write_text(json.dumps(history, indent=2), encoding='utf-8')
