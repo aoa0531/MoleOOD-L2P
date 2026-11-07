@@ -1,3 +1,4 @@
+import ast
 import os
 import json
 import torch
@@ -10,7 +11,7 @@ class LBAPDatasetWithSub(Dataset):
     """
     纯净版 Dataset：直接读取 JSON 文件，并使用 PyG 将 SMILES 转换为图
     """
-    def __init__(self, ann_file: str, split: str):
+    def __init__(self, ann_file: str, split: str, indices=None):
         super(LBAPDatasetWithSub, self).__init__()
         
         if not os.path.exists(ann_file):
@@ -41,7 +42,11 @@ class LBAPDatasetWithSub(Dataset):
         if split not in full_data['split']:
             raise ValueError(f"JSON 文件中没有找到 split: {split}")
             
-        self.data_infos = full_data['split'][split]
+        records = full_data['split'][split]
+        self.indices = list(range(len(records))) if indices is None else list(indices)
+        if len(set(self.indices)) != len(self.indices) or any(i < 0 or i >= len(records) for i in self.indices):
+            raise ValueError('Invalid or duplicated dataset indices')
+        self.data_infos = [records[i] for i in self.indices]
         print(f"[Dataset] 成功加载 {split} 集，共 {len(self.data_infos)} 个分子。")
 
     def __len__(self):
@@ -87,7 +92,7 @@ class LBAPDatasetWithSub(Dataset):
         subs_str = case.get('substructure', "{}")
         if isinstance(subs_str, str):
             try:
-                subs_list = list(eval(subs_str))
+                subs_list = sorted(ast.literal_eval(subs_str))
             except:
                 subs_list = [smiles]
         else:
@@ -122,3 +127,10 @@ class LBAPDatasetWithChem(LBAPDatasetWithSub):
         data = super(LBAPDatasetWithChem, self).__getitem__(idx)
         data.smiles = self.data_infos[idx]["smiles"]
         return data
+
+def collate_molecules(items):
+    """Preserve variable-length substructure lists without PyG sequence zipping."""
+    from torch_geometric.data import Batch
+    batch = Batch.from_data_list(items, exclude_keys=['subs'])
+    batch.subs = [item.subs for item in items]
+    return batch

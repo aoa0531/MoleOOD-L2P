@@ -1,0 +1,7 @@
+# Versions used for the CPU verification; choose the appropriate Torch CUDA wheel
+# separately when running on a GPU machine.
+torch==2.8.0
+torch-geometric==2.6.1
+rdkit==2025.9.2
+numpy==2.0.2
+scikit-learn==1.6.1

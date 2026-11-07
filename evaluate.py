@@ -1,3 +1,10 @@
+# Dispatch before importing the legacy DrugOOD/MMCV evaluation dependencies.
+import sys
+if __name__ == '__main__' and '--iil-checkpoint' in sys.argv:
+    from train_iil import evaluation_main
+    evaluation_main()
+    raise SystemExit(0)
+
 import time
 import os
 import argparse
