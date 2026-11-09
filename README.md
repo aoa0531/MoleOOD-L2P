@@ -301,4 +301,3 @@ OOD 结果用于补充评估未见骨架上的泛化能力。固定测试集上�
 - [MoleOOD](https://github.com/yangnianzu0515/MoleOOD)
 - [L2P](https://github.com/google-research/l2p)
 
-使用或发表基于本项目的研究时，请引用对应原始工作。
